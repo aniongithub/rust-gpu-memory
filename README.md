@@ -95,9 +95,14 @@ $ gpu-memory --json
 use gpu_memory::{list_gpus, MemoryKind};
 
 for gpu in list_gpus().expect("no GPUs found") {
+    // `available_bytes` is `Option<u64>`; `format_bytes` renders `None` as
+    // "unknown".
+    let free = gpu_memory::parse::format_bytes(gpu.memory.available_bytes);
     match gpu.memory.kind {
-        MemoryKind::Discrete => println!("{}: {} free VRAM", gpu.name, gpu.memory.available_bytes),
-        MemoryKind::Unified  => println!("{}: {} free system RAM (shared)", gpu.name, gpu.memory.available_bytes),
+        MemoryKind::Discrete => println!("{}: {} free VRAM", gpu.name, free),
+        MemoryKind::Unified  => println!("{}: {} free system RAM (shared)", gpu.name, free),
+        // `MemoryKind` is `#[non_exhaustive]`, so a wildcard arm is required.
+        _ => println!("{}: {} (unrecognized kind)", gpu.name, free),
     }
 }
 ```

@@ -33,38 +33,68 @@ pub struct DeviceProfile {
     pub is_uma: bool,
 }
 
+/// Returns `true` if `needle` occurs in `hay` as a whole word (case
+/// insensitive). Words are maximal runs of ASCII alphanumeric characters, so
+/// `"spark"` matches `"DGX Spark"` but not `"SPARKLE"`, and `"gb10"` matches
+/// `"GB10"` but not `"GB100"`.
+fn contains_word(hay: &str, needle: &str) -> bool {
+    let needle = needle.to_ascii_lowercase();
+    hay.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|w| w.to_ascii_lowercase() == needle)
+}
+
 /// Returns a [`DeviceProfile`] if the signals match a known UMA accelerator
 /// platform (NVIDIA GB10 "Spark" family).
 ///
-/// Matching is case-insensitive on the substrings `"spark"` and `"gb10"` in
-/// the system model, system vendor, or any GPU name. The vendor alone is
-/// never sufficient (ordinary NVIDIA machines are not UMA).
+/// Matching is case-insensitive and on whole words (so `"SPARKLE"` or
+/// `"GB100"` do not match). A platform is recognized when:
+/// - the system model contains the word `spark` or `gb10`, or
+/// - the system vendor contains the word `spark` or `gb10`, or
+/// - a GPU name contains `spark`/`gb10` **and** an NVIDIA context is present
+///   (the system vendor or that GPU name contains the word `nvidia`).
+///
+/// An ordinary NVIDIA machine (e.g. an RTX 4090) has no `spark`/`gb10` word
+/// anywhere, so it is never misclassified as UMA.
 pub fn detect_uma_device(signals: &MachineSignals) -> Option<DeviceProfile> {
-    let hay = |s: &str| s.to_ascii_lowercase();
-    let is_spark = |s: &str| {
-        let s = hay(s);
-        s.contains("spark") || s.contains("gb10")
-    };
+    let is_spark = |s: &str| contains_word(s, "spark") || contains_word(s, "gb10");
 
-    let model_match = signals
+    let model_is_spark = signals
         .system_model
         .as_deref()
         .map(is_spark)
         .unwrap_or(false);
-    let vendor_match = signals
+    let vendor_is_spark = signals
         .system_vendor
         .as_deref()
         .map(is_spark)
         .unwrap_or(false);
-    let gpu_match = signals.gpu_names.iter().any(|n| is_spark(n));
+    let vendor_is_nvidia = signals
+        .system_vendor
+        .as_deref()
+        .map(|s| contains_word(s, "nvidia"))
+        .unwrap_or(false);
 
-    if model_match || vendor_match || gpu_match {
+    let gpu_spark_matches: Vec<String> = signals
+        .gpu_names
+        .iter()
+        .filter(|n| is_spark(n))
+        .cloned()
+        .collect();
+    let gpu_name_has_nvidia = signals
+        .gpu_names
+        .iter()
+        .any(|n| contains_word(n, "nvidia"));
+
+    let matched = model_is_spark
+        || vendor_is_spark
+        || (vendor_is_nvidia && !gpu_spark_matches.is_empty())
+        || (!gpu_spark_matches.is_empty() && gpu_name_has_nvidia);
+
+    if matched {
         // Prefer the GPU name reported by the platform; fall back to the
         // system model; fall back to a generic name.
-        let name = signals
-            .gpu_names
-            .iter()
-            .find(|n| is_spark(n))
+        let name = gpu_spark_matches
+            .first()
             .cloned()
             .or_else(|| signals.system_model.clone())
             .unwrap_or_else(|| "NVIDIA GB10 (Spark)".to_string());
@@ -137,5 +167,24 @@ mod tests {
     fn matching_is_case_insensitive() {
         let s = signals(Some("dgx spark"), None, &[]);
         assert!(detect_uma_device(&s).is_some());
+    }
+
+    #[test]
+    fn sparkle_intel_board_is_not_nvidia_gb10() {
+        // "SPARKLE" contains the substring "spark" but is not the GB10
+        // "Spark" platform; it must not be misclassified as NVIDIA UMA.
+        let s = signals(
+            Some("Desktop"),
+            Some("Intel"),
+            &["SPARKLE Intel Arc A770"],
+        );
+        assert!(detect_uma_device(&s).is_none());
+    }
+
+    #[test]
+    fn gb100_is_not_gb10() {
+        // "GB100" contains the substring "gb10" but is a different chip.
+        let s = signals(Some("GB100 Server"), Some("NVIDIA"), &["NVIDIA GB100"]);
+        assert!(detect_uma_device(&s).is_none());
     }
 }

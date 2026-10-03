@@ -110,14 +110,19 @@ fn nvidia_smi() -> Option<Vec<crate::parse::NvidiaSmiGpu>> {
     Some(parse_nvidia_smi_csv(&String::from_utf8_lossy(&out.stdout)))
 }
 
-/// Runs `lspci -mm` and returns a slot -> name map, or an empty map if the
-/// tool is not available.
+/// Runs `lspci -mm` and returns a canonical-PCI-key -> name map, or an empty
+/// map if the tool is not available. Keys are canonicalized via
+/// [`pci_match_key`] so they join with the sysfs `PCI_SLOT_NAME` values used
+/// by [`gpu_name`].
 fn lspci_names() -> std::collections::HashMap<String, String> {
     let out = match std::process::Command::new("lspci").arg("-mm").output() {
         Ok(o) if o.status.success() => o,
         _ => return std::collections::HashMap::new(),
     };
     parse_lspci_mm(&String::from_utf8_lossy(&out.stdout))
+        .into_iter()
+        .map(|(slot, name)| (pci_match_key(&slot), name))
+        .collect()
 }
 
 /// Reads `/proc/meminfo` for system RAM (used for UMA reporting).

@@ -77,39 +77,79 @@ pub fn parse_nvidia_smi_csv(output: &str) -> Vec<NvidiaSmiGpu> {
         .collect()
 }
 
-/// Normalizes a PCI bus ID to its `bus:slot.func` suffix so that
-/// `"00000000:01:00.0"` (nvidia-smi) and `"0000:01:00.0"` (sysfs) compare
-/// equal.
+/// Normalizes a PCI bus ID to a canonical `domain:bus:slot.func` key so that
+/// the same device reported by different tools compares equal:
+/// `"00000000:01:00.0"` (nvidia-smi), `"0000:01:00.0"` (sysfs) and
+/// `"01:00.0"` (lspci, which omits the domain) all map to `"0:01:00.0"`.
+///
+/// The domain is preserved (hex-normalized) so that devices in different PCI
+/// domains at the same bus/slot/function remain distinct.
 pub fn pci_match_key(s: &str) -> String {
     let parts: Vec<&str> = s.split(':').collect();
-    if parts.len() == 3 {
-        format!("{}:{}", parts[1], parts[2])
-    } else {
-        s.to_string()
+    match parts.len() {
+        // `domain:bus:slot.func` — canonicalize the domain to a bare hex
+        // value so `00000000` and `0000` compare equal.
+        3 => match u32::from_str_radix(parts[0], 16) {
+            Ok(domain) => format!("{:x}:{}:{}", domain, parts[1], parts[2]),
+            Err(_) => s.to_string(),
+        },
+        // `bus:slot.func` (lspci) — no domain, so assume domain 0.
+        2 => format!("0:{}:{}", parts[0], parts[1]),
+        _ => s.to_string(),
     }
 }
 
-/// Parses `lspci -mm` (machine-readable, tab-separated) output into a map of
-/// PCI slot (e.g. `"01:00.0"`) to device name.
+/// Parses `lspci -mm` (machine-readable) output into a map of PCI slot
+/// (e.g. `"01:00.0"`) to device name.
+///
+/// `lspci -mm` is whitespace-separated with double-quoted fields, e.g.
+/// `00:02.0 "VGA compatible controller" "Intel Corporation" "UHD Graphics 770" -r04`.
+/// The slot is the first token and the device name is the last quoted field
+/// on the line.
 pub fn parse_lspci_mm(output: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for line in output.lines() {
-        let fields: Vec<&str> = line.split('\t').collect();
-        let (Some(slot), Some(_class), Some(_id), Some(name)) = (
-            fields.get(0),
-            fields.get(1),
-            fields.get(2),
-            fields.get(3),
-        ) else {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let (slot, rest) = match line.split_once(char::is_whitespace) {
+            Some((slot, rest)) => (slot, rest),
+            None => continue,
+        };
+        if slot.is_empty() {
+            continue;
+        }
+        let quoted = quoted_fields(rest);
+        let Some(name) = quoted.last() else {
             continue;
         };
-        let slot = slot.trim();
-        let name = name.trim();
-        if !slot.is_empty() && !name.is_empty() {
-            map.insert(slot.to_string(), name.to_string());
+        if !name.is_empty() {
+            map.insert(slot.to_string(), name.clone());
         }
     }
     map
+}
+
+/// Extracts the contents of double-quoted fields from a string, in order.
+fn quoted_fields(s: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'"' {
+            if let Some(rel) = s[i + 1..].find('"') {
+                let end = i + 1 + rel;
+                out.push(s[i + 1..end].to_string());
+                i = end + 1;
+            } else {
+                break;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Converts a NUL-terminated (or full) UTF-16 buffer to a `String`.
@@ -182,23 +222,34 @@ Buffers:          500000 kB
 
     #[test]
     fn pci_key_normalizes_domain() {
-        assert_eq!(pci_match_key("00000000:01:00.0"), "01:00.0");
-        assert_eq!(pci_match_key("0000:01:00.0"), "01:00.0");
+        // nvidia-smi (8-hex domain), sysfs (4-hex domain) and lspci (no
+        // domain) all refer to the same device and must compare equal.
+        assert_eq!(pci_match_key("00000000:01:00.0"), "0:01:00.0");
+        assert_eq!(pci_match_key("0000:01:00.0"), "0:01:00.0");
+        assert_eq!(pci_match_key("01:00.0"), "0:01:00.0");
         assert_eq!(pci_match_key("weird"), "weird");
     }
 
     #[test]
+    fn pci_key_keeps_domains_distinct() {
+        // Different PCI domains at the same bus/slot/function are different
+        // devices and must not collide.
+        assert_ne!(pci_match_key("0000:01:00.0"), pci_match_key("0001:01:00.0"));
+    }
+
+    #[test]
     fn lspci_mm_parses() {
-        let out = "00:02.0\tVGA compatible controller\t[8086:9a49]\tIntel Corporation Raptor Lake-P [UHD Graphics]\n\
-                   01:00.0\t3D controller\t[10de:2684]\tNVIDIA Corporation GA102 [GeForce RTX 3090]\t(rev a1)\n";
+        // Real `lspci -mm` output: whitespace-separated, quoted fields.
+        let out = "00:02.0 \"VGA compatible controller\" \"Intel Corporation\" \"UHD Graphics 770\" -r04\n\
+                   01:00.0 \"3D controller\" \"NVIDIA Corporation\" \"GA102 [GeForce RTX 3090]\" -r01\n";
         let map = parse_lspci_mm(out);
         assert_eq!(
             map.get("00:02.0").map(String::as_str),
-            Some("Intel Corporation Raptor Lake-P [UHD Graphics]")
+            Some("UHD Graphics 770")
         );
         assert_eq!(
             map.get("01:00.0").map(String::as_str),
-            Some("NVIDIA Corporation GA102 [GeForce RTX 3090]")
+            Some("GA102 [GeForce RTX 3090]")
         );
     }
 

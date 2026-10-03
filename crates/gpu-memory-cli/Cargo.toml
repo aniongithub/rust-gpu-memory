@@ -1,0 +1,15 @@
+[package]
+name = "gpu-memory-cli"
+description = "Example CLI for the gpu-memory crate"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "gpu-memory"
+path = "src/main.rs"
+
+[dependencies]
+gpu-memory = { workspace = true }
+serde_json = { workspace = true }

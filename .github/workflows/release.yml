@@ -1,0 +1,165 @@
+name: release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v0.1.0-pre)"
+        required: true
+        default: "v0.1.0-pre"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            cross: false
+            asset: gpu-memory-x86_64-apple-darwin
+            ext: tar.gz
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            cross: false
+            asset: gpu-memory-aarch64-apple-darwin
+            ext: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            cross: false
+            asset: gpu-memory-x86_64-pc-windows-msvc
+            ext: zip
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            cross: false
+            asset: gpu-memory-x86_64-unknown-linux-gnu
+            ext: tar.gz
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            cross: true
+            asset: gpu-memory-aarch64-unknown-linux-gnu
+            ext: tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-deps-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install zig + cargo-zigbuild (cross only)
+        if: matrix.cross
+        run: |
+          set -e
+          ZIG_VER=0.15.2
+          curl -fsSL -o /tmp/zig.tar.xz "https://ziglang.org/download/${ZIG_VER}/zig-x86_64-linux-${ZIG_VER}.tar.xz"
+          tar -xf /tmp/zig.tar.xz -C /tmp
+          ZIGDIR=$(ls -d /tmp/zig-x86_64-linux-${ZIG_VER})
+          echo "$ZIGDIR" >> "$GITHUB_PATH"
+          zig version
+          curl -fsSL -o /tmp/czb.tar.xz "https://github.com/rust-cross/cargo-zigbuild/releases/download/v0.23.4/cargo-zigbuild-x86_64-unknown-linux-gnu.tar.xz"
+          tar -xf /tmp/czb.tar.xz -C /tmp
+          mkdir -p "$HOME/.cargo/bin"
+          cp /tmp/cargo-zigbuild-x86_64-unknown-linux-gnu/cargo-zigbuild "$HOME/.cargo/bin/"
+          chmod +x "$HOME/.cargo/bin/cargo-zigbuild"
+          cargo-zigbuild --version
+
+      - name: Build
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cargo zigbuild --release --target ${{ matrix.target }}
+          else
+            cargo build --release --target ${{ matrix.target }}
+          fi
+
+      - name: Package artifact
+        run: |
+          set -e
+          BIN=target/${{ matrix.target }}/release/gpu-memory
+          if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
+            BIN="${BIN}.exe"
+          fi
+          test -f "$BIN"
+          rm -rf stage && mkdir -p stage
+          cp "$BIN" stage/gpu-memory
+          if [ "${{ matrix.ext }}" = "zip" ]; then
+            (cd stage && zip -q "../${{ matrix.asset }}.zip" gpu-memory)
+          else
+            (cd stage && tar czf "../${{ matrix.asset }}.tar.gz" gpu-memory)
+          fi
+          ls -la "${{ matrix.asset }}.${{ matrix.ext }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}.${{ matrix.ext }}
+          if-no-files-found: error
+
+  package-crate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Package crate
+        run: cargo package -p gpu-memory --allow-dirty
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: crate
+          path: target/package/gpu-memory-0.1.0.crate
+          if-no-files-found: error
+
+  release:
+    needs: [build, package-crate]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          prerelease: true
+          draft: false
+          files: artifacts/*/*
+          body: |
+            Pre-release of **gpu-memory** — platform-independent total/available GPU memory reporting with correct discrete vs unified (UMA) handling.
+
+            ## Contents
+            - `gpu-memory` crate (`.crate`) — the library
+            - `gpu-memory` CLI binaries for each platform
+
+            ## Platforms
+            | Asset | Target |
+            | --- | --- |
+            | `gpu-memory-x86_64-apple-darwin.tar.gz` | macOS (Intel) |
+            | `gpu-memory-aarch64-apple-darwin.tar.gz` | macOS (Apple Silicon) |
+            | `gpu-memory-x86_64-pc-windows-msvc.zip` | Windows (x86_64) |
+            | `gpu-memory-x86_64-unknown-linux-gnu.tar.gz` | Linux (x86_64) |
+            | `gpu-memory-aarch64-unknown-linux-gnu.tar.gz` | Linux (ARM64, e.g. DGX Spark) |
+
+            > `aarch64-pc-windows-msvc` (Windows on ARM, e.g. RTX Spark) is not yet in this release — it needs an ARM64 MSVC cross toolchain. Tracked as a follow-up.
+
+            ## Quick start
+            ```sh
+            tar xzf gpu-memory-<target>.tar.gz   # or unzip on Windows
+            ./gpu-memory            # human-readable table
+            ./gpu-memory --json     # machine-readable JSON
+            ```

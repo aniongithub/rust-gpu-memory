@@ -104,8 +104,9 @@ pub fn pci_match_key(s: &str) -> String {
 ///
 /// `lspci -mm` is whitespace-separated with double-quoted fields, e.g.
 /// `00:02.0 "VGA compatible controller" "Intel Corporation" "UHD Graphics 770" -r04`.
-/// The slot is the first token and the device name is the last quoted field
-/// on the line.
+/// The slot is the first token and the device name is the 3rd quoted field
+/// (class, vendor, device); we fall back to the last quoted field if fewer
+/// are present.
 pub fn parse_lspci_mm(output: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     for line in output.lines() {
@@ -121,7 +122,10 @@ pub fn parse_lspci_mm(output: &str) -> HashMap<String, String> {
             continue;
         }
         let quoted = quoted_fields(rest);
-        let Some(name) = quoted.last() else {
+        // The device name is the 3rd quoted field (class, vendor, device).
+        // Prefer it over last() so a trailing subsystem field (if present)
+        // is not mistaken for the device.
+        let Some(name) = quoted.get(2).or_else(|| quoted.last()) else {
             continue;
         };
         if !name.is_empty() {
@@ -250,6 +254,19 @@ Buffers:          500000 kB
         assert_eq!(
             map.get("01:00.0").map(String::as_str),
             Some("GA102 [GeForce RTX 3090]")
+        );
+    }
+
+    #[test]
+    fn lspci_mm_prefers_device_over_subsystem() {
+        // If `lspci -mm` ever emits subsystem vendor/device fields after the
+        // main device, we must still report the main device name (3rd field),
+        // not the trailing subsystem field.
+        let out = "00:02.0 \"VGA compatible controller\" \"Intel Corporation\" \"UHD Graphics 770\" \"Intel Corporation\" \"UHD Graphics 770 Subsys\"";
+        let map = parse_lspci_mm(out);
+        assert_eq!(
+            map.get("00:02.0").map(String::as_str),
+            Some("UHD Graphics 770")
         );
     }
 

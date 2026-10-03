@@ -69,6 +69,7 @@ jobs:
           tar -xf /tmp/zig.tar.xz -C /tmp
           ZIGDIR=$(ls -d /tmp/zig-x86_64-linux-${ZIG_VER})
           echo "$ZIGDIR" >> "$GITHUB_PATH"
+          export PATH="$ZIGDIR:$PATH"
           zig version
           curl -fsSL -o /tmp/czb.tar.xz "https://github.com/rust-cross/cargo-zigbuild/releases/download/v0.23.4/cargo-zigbuild-x86_64-unknown-linux-gnu.tar.xz"
           tar -xf /tmp/czb.tar.xz -C /tmp
@@ -78,6 +79,7 @@ jobs:
           cargo-zigbuild --version
 
       - name: Build
+        shell: bash
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then
             cargo zigbuild --release --target ${{ matrix.target }}
@@ -86,6 +88,7 @@ jobs:
           fi
 
       - name: Package artifact
+        shell: bash
         run: |
           set -e
           BIN=target/${{ matrix.target }}/release/gpu-memory
@@ -96,7 +99,7 @@ jobs:
           rm -rf stage && mkdir -p stage
           cp "$BIN" stage/gpu-memory
           if [ "${{ matrix.ext }}" = "zip" ]; then
-            (cd stage && zip -q "../${{ matrix.asset }}.zip" gpu-memory)
+            (cd stage && tar -a -cf "../${{ matrix.asset }}.zip" gpu-memory)
           else
             (cd stage && tar czf "../${{ matrix.asset }}.tar.gz" gpu-memory)
           fi

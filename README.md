@@ -46,6 +46,7 @@ Download a prebuilt binary from the [releases](../../releases) page:
 | `gpu-memory-x86_64-unknown-linux-gnu.tar.gz` | Linux (x86_64) |
 | `gpu-memory-aarch64-unknown-linux-gnu.tar.gz` | Linux (ARM64, e.g. DGX Spark) |
 | `gpu-memory-x86_64-pc-windows-msvc.zip` | Windows (x86_64) |
+| `gpu-memory-aarch64-pc-windows-msvc.zip` | Windows (ARM64, e.g. RTX Spark) |
 
 ### Library
 
@@ -68,9 +69,27 @@ gpu-memory = "0.1"
 | --- | --- | --- |
 | Linux | `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` | sysfs + `nvidia-smi` (when present) + `lspci` |
 | macOS | `x86_64-apple-darwin`, `aarch64-apple-darwin` | `libc` (IOKit / sysctl), unified memory |
-| Windows | `x86_64-pc-windows-msvc` | DXGI + registry + `nvidia-smi` (when present) |
+| Windows | `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc` | DXGI + registry + `nvidia-smi` (when present) |
 
 Other targets compile to a stub that returns `UnsupportedPlatform`.
+
+### GPU vendor support
+
+What you get for each vendor on each OS. **Discrete** = dedicated VRAM;
+**Unified** = shared system RAM.
+
+| Vendor | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| **NVIDIA** | Discrete · total + free ¹ | — | Discrete · total + free ¹ |
+| **AMD** | Discrete · total + free | — | Discrete · total only |
+| **Intel** | Discrete (Arc) · total + free · Unified (iGPU) · total + avail | — | Discrete · total only · Unified (iGPU) · total + avail |
+| **Apple** | — | Unified · total + avail | — |
+| **Other** | Listed, no memory | — | Listed, total only if discrete |
+
+- **total + free** / **total + avail** — both `total_bytes` and `available_bytes` are populated.
+- **total only** — only `total_bytes` is populated; the platform API doesn't expose free VRAM.
+- ¹ Free VRAM comes from `nvidia-smi` (must be on `PATH`). Without it, Linux lists the card with no memory and Windows falls back to DXGI (total only).
+- **macOS** reports a single unified Apple GPU (system RAM via `sysctl`) and does not enumerate discrete GPUs, so discrete AMD/NVIDIA on Intel Macs are not reported.
 
 ### Special UMA accelerators (NVIDIA GB10 "Spark")
 

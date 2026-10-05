@@ -35,6 +35,11 @@ jobs:
             cross: false
             asset: gpu-memory-x86_64-pc-windows-msvc
             ext: zip
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            cross: false
+            asset: gpu-memory-aarch64-pc-windows-msvc
+            ext: zip
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             cross: false
@@ -79,6 +84,7 @@ jobs:
           cargo-zigbuild --version
 
       - name: Build
+        if: matrix.target != 'aarch64-pc-windows-msvc'
         shell: bash
         run: |
           if [ "${{ matrix.cross }}" = "true" ]; then
@@ -87,6 +93,18 @@ jobs:
             cargo build --release --target ${{ matrix.target }}
           fi
 
+      - name: Build (Windows ARM64)
+        if: matrix.target == 'aarch64-pc-windows-msvc'
+        shell: cmd
+        run: |
+          for /f "tokens=* delims=" %%i in ('"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath') do set "VS_PATH=%%i"
+          if not defined VS_PATH (
+            echo ERROR: Visual Studio not found
+            exit /b 1
+          )
+          call "%VS_PATH%\VC\Auxiliary\Build\vcvarsall.bat" x64_arm64
+          cargo build --release --target aarch64-pc-windows-msvc
+
       - name: Package artifact
         shell: bash
         run: |
@@ -94,9 +112,9 @@ jobs:
           # The binary inside the archive must keep its platform extension:
           # `gpu-memory.exe` on Windows, `gpu-memory` elsewhere.
           BIN_NAME="gpu-memory"
-          if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
-            BIN_NAME="gpu-memory.exe"
-          fi
+          case "${{ matrix.target }}" in
+            *-pc-windows-*) BIN_NAME="gpu-memory.exe" ;;
+          esac
           BIN="target/${{ matrix.target }}/release/${BIN_NAME}"
           test -f "$BIN"
           rm -rf stage && mkdir -p stage
@@ -160,10 +178,9 @@ jobs:
             | `gpu-memory-x86_64-apple-darwin.tar.gz` | macOS (Intel) |
             | `gpu-memory-aarch64-apple-darwin.tar.gz` | macOS (Apple Silicon) |
             | `gpu-memory-x86_64-pc-windows-msvc.zip` | Windows (x86_64) |
+            | `gpu-memory-aarch64-pc-windows-msvc.zip` | Windows (ARM64, e.g. RTX Spark) |
             | `gpu-memory-x86_64-unknown-linux-gnu.tar.gz` | Linux (x86_64) |
             | `gpu-memory-aarch64-unknown-linux-gnu.tar.gz` | Linux (ARM64, e.g. DGX Spark) |
-
-            > `aarch64-pc-windows-msvc` (Windows on ARM, e.g. RTX Spark) is not yet in this release — it needs an ARM64 MSVC cross toolchain. Tracked as a follow-up.
 
             ## Quick start
             ```sh

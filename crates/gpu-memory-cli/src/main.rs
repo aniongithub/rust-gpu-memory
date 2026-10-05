@@ -9,6 +9,12 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let as_json = args.iter().any(|a| a == "--json" || a == "-j");
+    let show_version = args.iter().any(|a| a == "--version" || a == "-V");
+
+    if show_version {
+        println!("gpu-memory {}", gpu_memory::version());
+        return ExitCode::SUCCESS;
+    }
 
     match list_gpus() {
         Ok(gpus) => {

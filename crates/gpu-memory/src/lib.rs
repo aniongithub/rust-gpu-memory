@@ -32,6 +32,13 @@ pub mod types;
 pub use error::{Error, Result};
 pub use types::{Gpu, GpuVendor, MemoryInfo, MemoryKind};
 
+/// The version of this crate, as injected at build time from the git tag
+/// (see `build.rs`). When built outside a git checkout — e.g. from a crates.io
+/// tarball — this is the manifest version instead.
+pub fn version() -> &'static str {
+    env!("GPU_MEMORY_VERSION")
+}
+
 /// Lists all GPUs on this system with total and available memory.
 ///
 /// Returns an empty `Vec` if no GPUs are found.

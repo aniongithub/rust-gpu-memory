@@ -91,17 +91,20 @@ jobs:
         shell: bash
         run: |
           set -e
-          BIN=target/${{ matrix.target }}/release/gpu-memory
+          # The binary inside the archive must keep its platform extension:
+          # `gpu-memory.exe` on Windows, `gpu-memory` elsewhere.
+          BIN_NAME="gpu-memory"
           if [ "${{ matrix.target }}" = "x86_64-pc-windows-msvc" ]; then
-            BIN="${BIN}.exe"
+            BIN_NAME="gpu-memory.exe"
           fi
+          BIN="target/${{ matrix.target }}/release/${BIN_NAME}"
           test -f "$BIN"
           rm -rf stage && mkdir -p stage
-          cp "$BIN" stage/gpu-memory
+          cp "$BIN" "stage/${BIN_NAME}"
           if [ "${{ matrix.ext }}" = "zip" ]; then
-            (cd stage && tar -a -cf "../${{ matrix.asset }}.zip" gpu-memory)
+            (cd stage && tar -a -cf "../${{ matrix.asset }}.zip" "${BIN_NAME}")
           else
-            (cd stage && tar czf "../${{ matrix.asset }}.tar.gz" gpu-memory)
+            (cd stage && tar czf "../${{ matrix.asset }}.tar.gz" "${BIN_NAME}")
           fi
           ls -la "${{ matrix.asset }}.${{ matrix.ext }}"
 
@@ -124,7 +127,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: crate
-          path: target/package/gpu-memory-0.1.0.crate
+          path: target/package/gpu-memory-*.crate
           if-no-files-found: error
 
   release:
